@@ -3,10 +3,12 @@ import mysql from 'mysql2/promise';
 import bcrypt from 'bcrypt';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import jwt from 'jsonwebtoken';
+
 dotenv.config();
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(cors());
@@ -18,7 +20,6 @@ const dbConfig = {
     database: process.env.DB_DATABASE,
     port: 3306
 };
-
 
 async function initializeDatabase() {
     const connection = await mysql.createConnection({
@@ -42,13 +43,11 @@ async function initializeDatabase() {
     await connection.end();
 }
 
-
 app.post('/register', async (req, res) => {
     const { name, email, phone, password } = req.body;
 
     console.log(req.body);
-    
-    
+
     if (!name || !email || !password) {
         return res.status(400).json({ message: 'All required fields must be provided' });
     }
@@ -64,17 +63,14 @@ app.post('/register', async (req, res) => {
     try {
         const connection = await mysql.createConnection(dbConfig);
 
-        
         const [existingUsers] = await connection.query('SELECT email FROM registration WHERE email = ?', [email]);
         if (existingUsers.length > 0) {
             await connection.end();
             return res.status(400).json({ message: 'Email already exists' });
         }
 
-        
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        
         await connection.query(
             'INSERT INTO registration (name, email, phone, password) VALUES (?, ?, ?, ?)',
             [name, email, phone || null, hashedPassword]
@@ -88,6 +84,51 @@ app.post('/register', async (req, res) => {
     }
 });
 
+app.post('/login', async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+
+        const [users] = await connection.query('SELECT * FROM registration WHERE email = ?', [email]);
+        if (users.length === 0) {
+            await connection.end();
+            return res.status(401).json({ message: 'Invalid email or password' });
+        }
+
+        const user = users[0];
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+            await connection.end();
+            return res.status(401).json({ message: 'Invalid email or password' });
+        }
+
+        const token = jwt.sign(
+            { userId: user.id, email: user.email },
+            process.env.JWT_SECRET || 'thisissecretkeyforjwt',
+            { expiresIn: '1h' }
+        );
+
+        await connection.end();
+        res.status(200).json({
+            message: 'Login successful',
+            token,
+            user: {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                phone: user.phone
+            }
+        });
+    } catch (error) {
+        console.error('Error during login:', error);
+        res.status(500).json({ message: 'Server error during login' });
+    }
+});
 
 async function startServer() {
     try {
